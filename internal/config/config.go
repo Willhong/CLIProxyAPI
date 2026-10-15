@@ -75,6 +75,10 @@ type Config struct {
 	// Default: 60. Max: 3600.
 	RedisUsageQueueRetentionSeconds int `yaml:"redis-usage-queue-retention-seconds" json:"redis-usage-queue-retention-seconds"`
 
+	// CacheStatsFile is an absolute path where per-credential prompt-cache statistics persist.
+	// Empty keeps the statistics in memory only.
+	CacheStatsFile string `yaml:"cache-stats-file,omitempty" json:"cache-stats-file,omitempty"`
+
 	// DisableCooling disables auth/model cooldown scheduling when true unless a credential or provider overrides it.
 	DisableCooling bool `yaml:"disable-cooling" json:"disable-cooling"`
 
