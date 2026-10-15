@@ -132,7 +132,9 @@ func testStrictHTTPRouting(t *testing.T, identityHeader string) {
 	if (a > 0 && (afterA != a+1 || afterB != 0)) || (b > 0 && (afterB != b+1 || afterA != 0)) {
 		t.Fatalf("manager restart switched accounts: before=(%d,%d) after=(%d,%d)", a, b, afterA, afterB)
 	}
-	for _, failure := range []int{401, 403, 429, 500} {
+	// 429 runs last: it moves the conversation to the other account, which the
+	// fail-closed checks for the other statuses assume has not happened yet.
+	for _, failure := range []int{401, 403, 500, 429} {
 		t.Run(fmt.Sprintf("upstream_%d", failure), func(t *testing.T) {
 			mu.Lock()
 			status = failure
@@ -144,6 +146,13 @@ func testStrictHTTPRouting(t *testing.T, identityHeader string) {
 				t.Fatalf("upstream %d masked: status=%d body=%s", failure, got.Code, got.Body)
 			}
 			nextA, nextB := counts()
+			if failure == http.StatusTooManyRequests {
+				// Quota exhaustion moves the conversation: both accounts were tried once.
+				if nextA != beforeA+1 || nextB != beforeB+1 {
+					t.Fatalf("429 did not move to the other account: before=(%d,%d) after=(%d,%d)", beforeA, beforeB, nextA, nextB)
+				}
+				return
+			}
 			if nextA+nextB != beforeA+beforeB+1 || (beforeA > 0 && nextB != beforeB) || (beforeB > 0 && nextA != beforeA) {
 				t.Fatalf("failure %d retried/fell back: before=(%d,%d) after=(%d,%d)", failure, beforeA, beforeB, nextA, nextB)
 			}
