@@ -173,7 +173,9 @@ func testStrictWebsocketRouting(t *testing.T, identityHeader string) {
 	if err != nil || result != bound {
 		t.Fatalf("new manager changed account: bound=%s result=%s err=%v", bound, result, err)
 	}
-	for _, failure := range []int{401, 403, 429, 500} {
+	// 429 runs last: it moves the conversation to the other account, which the
+	// fail-closed checks for the other statuses assume has not happened yet.
+	for _, failure := range []int{401, 403, 500, 429} {
 		t.Run(fmt.Sprintf("bootstrap_%d", failure), func(t *testing.T) {
 			mu.Lock()
 			bootstrapStatus = failure
@@ -191,6 +193,13 @@ func testStrictWebsocketRouting(t *testing.T, identityHeader string) {
 				t.Fatalf("bootstrap %d wrong error frame: %s", failure, result)
 			}
 			a, b := counts()
+			if failure == http.StatusTooManyRequests {
+				// Quota exhaustion moves the conversation: both accounts were tried once.
+				if a != beforeA+1 || b != beforeB+1 {
+					t.Fatalf("bootstrap 429 did not move to the other account: before=(%d,%d) after=(%d,%d)", beforeA, beforeB, a, b)
+				}
+				return
+			}
 			if a+b > beforeA+beforeB+1 || (bound == "a" && b != beforeB) || (bound == "b" && a != beforeA) {
 				t.Fatalf("bootstrap %d retried/fell back: before=(%d,%d) after=(%d,%d)", failure, beforeA, beforeB, a, b)
 			}

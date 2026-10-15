@@ -1,6 +1,6 @@
 # Strict conversation routing with stock clients
 
-The proxy pins a credential to an authenticated caller and conversation in bbolt, without TTL or account failover. BB, Hermes, Claude Code and Codex do not need source changes. Prior patched-client experiments are not the adopted integration.
+The proxy pins one credential per authenticated caller, conversation and provider in bbolt, without TTL. A conversation that mixes providers (for example a Claude main model with Codex helper tasks) keeps one account per provider. BB, Hermes, Claude Code and Codex do not need source changes. Prior patched-client experiments are not the adopted integration.
 
 ## Build and initialize
 
@@ -19,7 +19,7 @@ routing:
   conversation-bindings-file: /absolute/private/state/conversation-bindings.db
 ```
 
-Bindings commit before upstream dispatch and are shared safely by concurrent processes. Missing/corrupt DBs and unavailable/deleted credentials fail closed. Changing to a model/provider the assigned credential cannot serve also fails rather than switching accounts. Home, plugin scheduler/executor and raw SDK HTTP bypass paths are unsupported in strict mode; Antigravity credit fallback is not entered.
+Bindings commit before upstream dispatch and are shared safely by concurrent processes. Missing/corrupt DBs and unavailable/deleted credentials fail closed. The only account move is quota exhaustion: when the bound credential is cooling down after a quota or rate-limit error for the requested model, the conversation moves to another credential of the same provider and the new binding is persisted; the new account starts without prompt cache. Other failures (401, 403, 5xx) never switch accounts. Bindings written before per-provider keys are honoured for their own provider. `POST /v1/images/generations` and `/v1/images/edits` without a conversation identity are one-shot: any account is picked and nothing is bound. Home, plugin scheduler/executor and raw SDK HTTP bypass paths are unsupported in strict mode; Antigravity credit fallback is not entered.
 
 ## Existing client settings only
 

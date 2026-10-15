@@ -2229,7 +2229,7 @@ func requestAwareCredSelectionRequired(ctx context.Context, auth *Auth, clientHe
 
 func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, ProviderExecutor, error) {
 	if m.strictEnabled(ctx) {
-		auth, exec, _, err := m.strictPick(ctx, opts, func(pinned cliproxyexecutor.Options) (*Auth, ProviderExecutor, string, error) {
+		auth, exec, _, err := m.strictPick(ctx, opts, []string{provider}, model, func(pinned cliproxyexecutor.Options) (*Auth, ProviderExecutor, string, error) {
 			a, e, pickErr := m.pickNextLegacy(strictPickContext(ctx), provider, model, pinned, tried)
 			return a, e, provider, pickErr
 		})
@@ -2549,7 +2549,7 @@ func (m *Manager) SelectHomeAuthByKind(ctx context.Context, provider string, mod
 
 func (m *Manager) pickNext(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, ProviderExecutor, error) {
 	if m.strictEnabled(ctx) {
-		auth, exec, _, err := m.strictPick(ctx, opts, func(pinned cliproxyexecutor.Options) (*Auth, ProviderExecutor, string, error) {
+		auth, exec, _, err := m.strictPick(ctx, opts, []string{provider}, model, func(pinned cliproxyexecutor.Options) (*Auth, ProviderExecutor, string, error) {
 			a, e, pickErr := m.pickNext(strictPickContext(ctx), provider, model, pinned, tried)
 			return a, e, provider, pickErr
 		})
@@ -2685,7 +2685,7 @@ func (m *Manager) HasAlternativeTargetForModel(ctx context.Context, providers []
 
 func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, ProviderExecutor, string, error) {
 	if m.strictEnabled(ctx) {
-		return m.strictPick(ctx, opts, func(pinned cliproxyexecutor.Options) (*Auth, ProviderExecutor, string, error) {
+		return m.strictPick(ctx, opts, providers, model, func(pinned cliproxyexecutor.Options) (*Auth, ProviderExecutor, string, error) {
 			return m.pickNextMixedLegacy(strictPickContext(ctx), providers, model, pinned, tried)
 		})
 	}
@@ -2876,7 +2876,7 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 
 func (m *Manager) pickNextMixed(ctx context.Context, providers []string, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, ProviderExecutor, string, error) {
 	if m.strictEnabled(ctx) {
-		return m.strictPick(ctx, opts, func(pinned cliproxyexecutor.Options) (*Auth, ProviderExecutor, string, error) {
+		return m.strictPick(ctx, opts, providers, model, func(pinned cliproxyexecutor.Options) (*Auth, ProviderExecutor, string, error) {
 			return m.pickNextMixed(strictPickContext(ctx), providers, model, pinned, tried)
 		})
 	}

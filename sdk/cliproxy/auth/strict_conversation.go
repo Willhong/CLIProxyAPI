@@ -13,6 +13,7 @@ import (
 	"time"
 
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	coreusage "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 	bolt "go.etcd.io/bbolt"
@@ -153,6 +154,24 @@ func strictCaller(ctx context.Context) string {
 	return coreusage.APIKeyFromContext(ctx)
 }
 
+// oneShotEndpoints carry no conversation: each request stands alone, so pinning an
+// account would protect nothing.
+var oneShotEndpoints = map[string]struct{}{
+	"POST /v1/images/generations": {},
+	"POST /v1/images/edits":       {},
+}
+
+// oneShotWithoutConversation reports whether err is only a missing conversation ID on a
+// one-shot endpoint, which may then pick any account without writing a binding.
+func oneShotWithoutConversation(ctx context.Context, err error) bool {
+	var strictErr *Error
+	if !errors.As(err, &strictErr) || strictErr.Code != "conversation_id_required" {
+		return false
+	}
+	_, ok := oneShotEndpoints[logging.GetEndpoint(ctx)]
+	return ok
+}
+
 // prepareStrictConversation removes the private identity before it reaches an upstream executor.
 func (m *Manager) prepareStrictConversation(ctx context.Context, opts cliproxyexecutor.Options) (cliproxyexecutor.Options, error) {
 	cfg := m.runtimeConfig.Load().(*internalconfig.Config)
@@ -164,6 +183,9 @@ func (m *Manager) prepareStrictConversation(ctx context.Context, opts cliproxyex
 	}
 	id, err := strictConversationID(opts)
 	if err != nil {
+		if oneShotWithoutConversation(ctx, err) {
+			return opts, nil
+		}
 		return opts, err
 	}
 	opts.EnsureMetadata()
@@ -177,7 +199,13 @@ func (m *Manager) prepareStrictConversation(ctx context.Context, opts cliproxyex
 	return opts, nil
 }
 
-func (m *Manager) strictPick(ctx context.Context, opts cliproxyexecutor.Options, pick func(cliproxyexecutor.Options) (*Auth, ProviderExecutor, string, error)) (*Auth, ProviderExecutor, string, error) {
+// strictPick pins one credential per (caller, conversation, provider). A conversation
+// may use several providers, such as a main Claude model with Codex helper tasks. It
+// moves to another account of the same provider only when the bound account has used
+// up its quota for model; any other failure of the bound account fails closed.
+// providers lists the providers this request may be served by; the binding is written
+// under the provider of the credential actually picked.
+func (m *Manager) strictPick(ctx context.Context, opts cliproxyexecutor.Options, providers []string, model string, pick func(cliproxyexecutor.Options) (*Auth, ProviderExecutor, string, error)) (*Auth, ProviderExecutor, string, error) {
 	cfg := m.runtimeConfig.Load().(*internalconfig.Config)
 	if !cfg.Routing.StrictConversationAffinity {
 		return pick(opts)
@@ -187,6 +215,9 @@ func (m *Manager) strictPick(ctx context.Context, opts cliproxyexecutor.Options,
 	}
 	id, err := strictConversationID(opts)
 	if err != nil {
+		if oneShotWithoutConversation(ctx, err) {
+			return pick(opts)
+		}
 		return nil, nil, "", err
 	}
 	caller := strictCaller(ctx)
@@ -206,7 +237,12 @@ func (m *Manager) strictPick(ctx context.Context, opts cliproxyexecutor.Options,
 		return nil, nil, "", strictConversationError("conversation_storage_unavailable", http.StatusServiceUnavailable)
 	}
 	defer db.Close()
-	digest := sha256.Sum256([]byte(caller + "\x00" + id))
+	providerKey := func(provider string) []byte {
+		digest := sha256.Sum256([]byte(caller + "\x00" + id + "\x00" + canonicalSchedulingProvider(provider)))
+		return digest[:]
+	}
+	// Bindings written before per-provider keys used caller and conversation only.
+	legacy := sha256.Sum256([]byte(caller + "\x00" + id))
 	var auth *Auth
 	var executor ProviderExecutor
 	var provider string
@@ -215,7 +251,24 @@ func (m *Manager) strictPick(ctx context.Context, opts cliproxyexecutor.Options,
 		if bucket == nil {
 			return strictConversationError("conversation_storage_unavailable", http.StatusServiceUnavailable)
 		}
-		if bound := bucket.Get(digest[:]); bound != nil {
+		var bound []byte
+		for _, candidate := range providers {
+			if bound = bucket.Get(providerKey(candidate)); bound != nil {
+				break
+			}
+		}
+		if bound == nil {
+			if old := bucket.Get(legacy[:]); old != nil && m.authServesProvider(string(old), providers) {
+				bound = old
+			}
+		}
+		moving := bound != nil && m.authQuotaExhausted(string(bound), model)
+		if moving {
+			// The selector skips the exhausted account, so it picks another one.
+			bound = nil
+		}
+		if bound != nil {
+			bound = append([]byte(nil), bound...)
 			opts.EnsureMetadata()
 			opts.Metadata = maps.Clone(opts.Metadata)
 			opts.Metadata[cliproxyexecutor.PinnedAuthMetadataKey] = string(bound)
@@ -228,16 +281,47 @@ func (m *Manager) strictPick(ctx context.Context, opts cliproxyexecutor.Options,
 		if auth == nil || auth.ID == "" {
 			return strictConversationError("auth_not_found", http.StatusServiceUnavailable)
 		}
-		if bound := bucket.Get(digest[:]); bound != nil {
-			if string(bound) != auth.ID {
-				return strictConversationError("conversation_account_unavailable", http.StatusServiceUnavailable)
-			}
+		if bound != nil && string(bound) != auth.ID {
+			return strictConversationError("conversation_account_unavailable", http.StatusServiceUnavailable)
+		}
+		key := providerKey(auth.Provider)
+		if !moving && bucket.Get(key) != nil {
 			return nil
 		}
-		return bucket.Put(digest[:], []byte(auth.ID))
+		return bucket.Put(key, []byte(auth.ID))
 	})
 	if err != nil {
 		return nil, nil, "", err
 	}
 	return auth, executor, provider, nil
+}
+
+// authServesProvider reports whether the registered credential id belongs to one of providers.
+func (m *Manager) authServesProvider(id string, providers []string) bool {
+	m.mu.RLock()
+	auth := m.auths[id]
+	m.mu.RUnlock()
+	if auth == nil {
+		return false
+	}
+	want := canonicalSchedulingProvider(auth.Provider)
+	for _, provider := range providers {
+		if canonicalSchedulingProvider(provider) == want {
+			return true
+		}
+	}
+	return false
+}
+
+// authQuotaExhausted reports whether the registered credential id is cooling down after
+// a quota or rate-limit error for model.
+func (m *Manager) authQuotaExhausted(id, model string) bool {
+	m.mu.RLock()
+	auth := m.auths[id]
+	m.mu.RUnlock()
+	if auth == nil {
+		return false
+	}
+	blocked, reason, _ := isAuthBlockedForModel(auth, model, time.Now())
+	return blocked && reason == blockReasonCooldown
 }
