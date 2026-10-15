@@ -123,9 +123,11 @@ func websocketClosePayloadForUpstreamError(err error) (bool, []byte) {
 }
 
 type responsesWebsocketWriter struct {
-	conn    *websocket.Conn
-	writeMu sync.Mutex
-	closing atomic.Bool
+	// Strict routing cannot recover by rotating accounts on reconnect; return the reason.
+	exposeTerminalErrors bool
+	conn                 *websocket.Conn
+	writeMu              sync.Mutex
+	closing              atomic.Bool
 }
 
 func newResponsesWebsocketWriter(conn *websocket.Conn) *responsesWebsocketWriter {
@@ -272,7 +274,7 @@ func (w *responsesWebsocketWriter) closeForUpstreamDisconnect(err error, wsTimel
 	}
 
 	errMsg := handlers.ExecutionErrorMessage(err)
-	if !shouldExposeResponsesUpstreamError(errMsg) {
+	if !w.exposeTerminalErrors && !shouldExposeResponsesUpstreamError(errMsg) {
 		closed, _ := w.closeWithoutError()
 		if closed && timelineLog != nil && errMsg != nil {
 			appendWebsocketTimelineDisconnect(timelineLog, errMsg.Error, time.Now())
@@ -425,6 +427,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		return
 	}
 	writer := newResponsesWebsocketWriter(conn)
+	writer.exposeTerminalErrors = h.AuthManager != nil && h.AuthManager.StrictConversationEnabled()
 	passthroughSessionID := uuid.NewString()
 	// After the upgrade, error-only HTTP logs cannot consume deferred bodies.
 	// Apply the policy before routing so plugin callbacks inherit it as well.
