@@ -372,6 +372,10 @@ type QuotaExceeded struct {
 
 // RoutingConfig configures how credentials are selected for requests.
 type RoutingConfig struct {
+	// StrictConversationAffinity requires durable caller-scoped conversation binding.
+	StrictConversationAffinity bool `yaml:"strict-conversation-affinity,omitempty" json:"strict-conversation-affinity,omitempty"`
+	// ConversationBindingsFile is an explicitly initialized absolute Bolt DB path.
+	ConversationBindingsFile string `yaml:"conversation-bindings-file,omitempty" json:"conversation-bindings-file,omitempty"`
 	// Strategy selects the credential selection strategy.
 	// Supported values: "round-robin" (default), "weighted-round-robin", "fill-first".
 	Strategy string `yaml:"strategy,omitempty" json:"strategy,omitempty"`

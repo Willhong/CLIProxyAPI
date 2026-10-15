@@ -309,7 +309,7 @@ func writeResponsesWebsocketTerminalError(
 	errMsg *interfaces.ErrorMessage,
 	payload []byte,
 ) ([]byte, bool, error) {
-	if !shouldExposeResponsesUpstreamError(errMsg) {
+	if !writer.exposeTerminalErrors && !shouldExposeResponsesUpstreamError(errMsg) {
 		// Keep the upstream reason in the request-log timeline even though the client
 		// only observes a closed connection, otherwise silent failures are
 		// undiagnosable after the fact.

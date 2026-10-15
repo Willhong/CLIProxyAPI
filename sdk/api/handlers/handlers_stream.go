@@ -297,6 +297,12 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 		return nil, nil, errChan
 	}
 	if routeDecision.ExecutorPluginID != "" {
+		if h.AuthManager != nil && h.AuthManager.StrictConversationEnabled() {
+			errChan := make(chan *interfaces.ErrorMessage, 1)
+			errChan <- &interfaces.ErrorMessage{StatusCode: http.StatusServiceUnavailable, Error: errors.New("strict routing does not support plugin executors")}
+			close(errChan)
+			return nil, nil, errChan
+		}
 		return h.streamWithPluginExecutor(ctx, entryProtocol, responseProtocol, modelName, originalRequestedModel, rawJSON, alt, routeDecision.ExecutorPluginID, execOptions)
 	}
 	providers, normalizedModel, errMsg := h.providersForExecution(modelName, originalRequestedModel, allowImageModel, routeDecision, execOptions)

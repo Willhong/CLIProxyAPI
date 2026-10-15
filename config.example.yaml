@@ -147,6 +147,15 @@ access:
 
 # Routing strategy for selecting credentials when multiple match.
 routing:
+  # Opt-in durable account binding with client authentication and an explicit conversation ID.
+  # Stock Codex: Session-Id; Claude Code: X-Claude-Code-Session-Id;
+  # Hermes: existing session_affinity_header setting set to X-Hermes-Session-ID.
+  # X-CLIProxy-Conversation-ID remains an optional explicit override, not a stock-client requirement.
+  # Initialize the database explicitly with cmd/init-conversation-bindings before enabling.
+  # Missing identity/storage or an unavailable bound account fails closed; no TTL or account failover.
+  # Home, plugin schedulers/executors and raw SDK HTTP requests are unsupported in strict mode.
+  strict-conversation-affinity: false
+  conversation-bindings-file: "" # absolute path to the initialized database; preserve across restarts
   strategy: "round-robin" # round-robin (default), weighted-round-robin, fill-first
   # weighted-round-robin uses each credential's integer weight (default 1, maximum 1,000,000).
   # Non-positive weights exclude the credential while this strategy is active.
