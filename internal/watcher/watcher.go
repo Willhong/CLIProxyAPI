@@ -49,6 +49,7 @@ type Watcher struct {
 	lastAuthContents  map[string]*coreauth.Auth
 	fileAuthsByPath   map[string]map[string]*coreauth.Auth
 	lastRemoveTimes   map[string]time.Time
+	authRechecks      map[string]*time.Timer // Guarded by authRescanMu; one trailing check per path.
 	lastConfigHash    string
 	authQueue         chan<- AuthUpdate
 	currentAuths      map[string]*coreauth.Auth
@@ -143,6 +144,7 @@ func (w *Watcher) Start(ctx context.Context) error {
 // Stop stops the file watcher
 func (w *Watcher) Stop() error {
 	w.stopped.Store(true)
+	w.stopAuthRechecks()
 	w.stopDispatch()
 	w.stopConfigReloadTimer()
 	w.stopServerUpdateTimer()

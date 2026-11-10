@@ -113,6 +113,10 @@ type Auth struct {
 
 	recentRequests recentRequestRing `json:"-"`
 	indexAssigned  bool              `json:"-"`
+	// Earliest generation in a run of credential-identical watcher reloads.
+	subscriptionReloadGeneration uint64
+	// Rate-limit fresh quota validation when a restored cooldown has no spending proof.
+	subscriptionRecheckAfter time.Time
 }
 
 const (

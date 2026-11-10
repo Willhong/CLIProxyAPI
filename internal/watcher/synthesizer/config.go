@@ -21,6 +21,14 @@ func NewConfigSynthesizer() *ConfigSynthesizer {
 	return &ConfigSynthesizer{}
 }
 
+func addSubscriptionFallbackToAttrs(fallback *config.SubscriptionFallbackConfig, attrs map[string]string) {
+	if fallback == nil {
+		return
+	}
+	attrs["subscription_fallback_auth_id"] = fallback.AuthID
+	attrs["subscription_fallback_enabled"] = strconv.FormatBool(fallback.Enabled)
+}
+
 func addWeightToAttrs(weight *int, attrs map[string]string) {
 	if weight == nil {
 		return
@@ -166,6 +174,7 @@ func (s *ConfigSynthesizer) synthesizeClaudeKeys(ctx *SynthesisContext) []*corea
 		if ck.Priority != 0 {
 			attrs["priority"] = strconv.Itoa(ck.Priority)
 		}
+		addSubscriptionFallbackToAttrs(ck.SubscriptionFallback, attrs)
 		addWeightToAttrs(ck.Weight, attrs)
 		if base != "" {
 			attrs["base_url"] = base
@@ -251,6 +260,7 @@ func (s *ConfigSynthesizer) synthesizeCodexStyleKeys(ctx *SynthesisContext, entr
 		if entry.Priority != 0 {
 			attrs["priority"] = strconv.Itoa(entry.Priority)
 		}
+		addSubscriptionFallbackToAttrs(entry.SubscriptionFallback, attrs)
 		addWeightToAttrs(entry.Weight, attrs)
 		if baseURL != "" {
 			attrs["base_url"] = baseURL

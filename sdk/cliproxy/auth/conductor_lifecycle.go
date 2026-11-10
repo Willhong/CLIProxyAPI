@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"maps"
 	"math"
 	"strings"
 	"sync"
@@ -128,6 +129,9 @@ func (m *Manager) Register(ctx context.Context, auth *Auth) (*Auth, error) {
 		auth.CredentialVersion = 1
 	}
 	auth.Generation = 1
+	auth.subscriptionReloadGeneration = 0
+	auth.Metadata = maps.Clone(auth.Metadata)
+	delete(auth.Metadata, subscriptionProofKey)
 	// Serialize this credential, but release the manager lock during store I/O.
 	// Persist failures stay non-fatal, but must not be silent: a restart would
 	// lose the credential that only exists in memory.
@@ -264,6 +268,14 @@ func (m *Manager) updateInternal(ctx context.Context, base, auth *Auth, mode upd
 		existingVersion = 1
 	}
 	credChanged := CredentialsChanged(existing, auth)
+	unchangedSubscription := sameSubscriptionReloadIdentity(existing, auth)
+	auth.subscriptionReloadGeneration = 0
+	if mode == updateModeReplace && unchangedSubscription {
+		auth.subscriptionReloadGeneration = existing.subscriptionReloadGeneration
+		if auth.subscriptionReloadGeneration == 0 {
+			auth.subscriptionReloadGeneration = existing.Generation
+		}
+	}
 	if credChanged {
 		auth.CredentialVersion = max(auth.CredentialVersion, existingVersion) + 1
 	} else {
@@ -313,6 +325,7 @@ func (m *Manager) updateInternal(ctx context.Context, base, auth *Auth, mode upd
 			auth.Metadata["antigravity_capability_hints"] = persistedHints
 		}
 	}
+	retainSubscriptionProof(auth, existing, unchangedSubscription)
 	auth.EnsureIndex()
 	// Save before publication, including the transactional Meta mint path.
 	// Runtime-only changes made during I/O are merged below, never overwritten.
@@ -332,6 +345,10 @@ func (m *Manager) updateInternal(ctx context.Context, base, auth *Auth, mode upd
 		return nil, fmt.Errorf("auth %s changed registration during persistence", auth.ID)
 	}
 	mergeAuthSaveDelta(auth, existingBeforeSave, existing, false)
+	retainSubscriptionProof(auth, existing, unchangedSubscription && sameSubscriptionReloadIdentity(existing, auth))
+	if !sameSubscriptionReloadIdentity(existing, auth) || existing.Generation != existingBeforeSave.Generation {
+		auth.subscriptionReloadGeneration = 0
+	}
 	if existing.Generation >= auth.Generation {
 		auth.Generation = existing.Generation + 1
 	}
@@ -478,6 +495,9 @@ func (m *Manager) Load(ctx context.Context) error {
 		m.authEpochs[auth.ID] = max(m.authEpochs[auth.ID], auth.RegistrationEpoch) + 1
 		auth.RegistrationEpoch = m.authEpochs[auth.ID]
 		auth.Generation = 1
+		auth.subscriptionReloadGeneration = 0
+		auth.Metadata = maps.Clone(auth.Metadata)
+		delete(auth.Metadata, subscriptionProofKey)
 		if prev, exists := previousAuths[auth.ID]; exists && prev != nil {
 			auth.CredentialVersion = max(auth.CredentialVersion, prev.CredentialVersion)
 			if CredentialsChanged(prev, auth) {

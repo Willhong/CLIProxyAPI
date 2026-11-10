@@ -49,6 +49,8 @@ func (s *Server) registerManagementV8Routes() {
 	v8.PATCH("/credentials/status", s.mgmt.PatchAuthFileStatus)
 	v8.PATCH("/credentials/fields", s.mgmt.PatchAuthFileFields)
 	v8.POST("/credentials/refresh", s.mgmt.RefreshAuthFiles)
+	v8.POST("/credentials/subscription-fallback/usage", s.mgmt.PostSubscriptionFallbackUsage)
+	v8.POST("/credentials/subscription-fallback/workspaces", s.mgmt.PostSubscriptionFallbackWorkspaces)
 	v8.POST("/oauth/import", s.mgmt.ImportOAuthV8)
 	v8.GET("/oauth/auth-url", s.mgmt.StartOAuthV8)
 	v8.GET("/oauth/status", s.mgmt.GetAuthStatus)
