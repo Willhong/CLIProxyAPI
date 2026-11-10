@@ -155,6 +155,10 @@ type Auth struct {
 
 	recentRequests recentRequestRing `json:"-"`
 	indexAssigned  bool              `json:"-"`
+	// Earliest generation in a run of credential-identical watcher reloads.
+	subscriptionReloadGeneration uint64
+	// Rate-limit fresh quota validation when a restored cooldown has no spending proof.
+	subscriptionRecheckAfter time.Time
 	// fileSnapshotPath and fileSnapshotDigest bind an unversioned file-synthesized
 	// Auth snapshot to the source file path and SHA-256 byte digest it observed.
 	// Cleared when committed to a Manager so runtime clones are not treated as

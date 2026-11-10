@@ -84,9 +84,12 @@ type requiredAuthKindContextKey struct{}
 type credentialPolicyContextKey struct{}
 
 type authSelectionEligibility struct {
-	requiredKind     string
-	credentialPolicy string
-	disallowFreeAuth bool
+	requiredKind      string
+	credentialPolicy  string
+	disallowFreeAuth  bool
+	fallbackID        string
+	provider          string
+	subscriptionsOnly bool
 }
 
 func withRequiredAuthKind(ctx context.Context, requiredKind string) context.Context {
@@ -111,11 +114,25 @@ func authSelectionEligibilityForRequest(ctx context.Context, opts cliproxyexecut
 		eligibility.requiredKind, _ = ctx.Value(requiredAuthKindContextKey{}).(string)
 		eligibility.credentialPolicy, _ = ctx.Value(credentialPolicyContextKey{}).(string)
 	}
+	if scope, ok := opts.Metadata[subscriptionSelectionMetadataKey].(subscriptionSelectionScope); ok {
+		eligibility.fallbackID = scope.fallbackID
+		eligibility.provider = scope.provider
+		eligibility.subscriptionsOnly = scope.subscriptionsOnly
+	}
 	return eligibility
 }
 
 func (e authSelectionEligibility) allows(auth *Auth) bool {
 	if auth == nil {
+		return false
+	}
+	if e.provider != "" && canonicalSchedulingProvider(auth.Provider) != e.provider {
+		return false
+	}
+	if isSubscriptionFallback(auth) && (e.fallbackID == "" || e.fallbackID != auth.ID) {
+		return false
+	}
+	if e.subscriptionsOnly && auth.AuthKind() != AuthKindOAuth {
 		return false
 	}
 	if e.requiredKind != "" && auth.AuthKind() != e.requiredKind {
@@ -2229,7 +2246,7 @@ func requestAwareCredSelectionRequired(ctx context.Context, auth *Auth, clientHe
 
 func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, ProviderExecutor, error) {
 	if m.strictEnabled(ctx) {
-		auth, exec, _, err := m.strictPick(ctx, opts, []string{provider}, model, func(pinned cliproxyexecutor.Options) (*Auth, ProviderExecutor, string, error) {
+		auth, exec, _, err := m.strictPick(ctx, opts, []string{provider}, model, tried, func(pinned cliproxyexecutor.Options) (*Auth, ProviderExecutor, string, error) {
 			a, e, pickErr := m.pickNextLegacy(strictPickContext(ctx), provider, model, pinned, tried)
 			return a, e, provider, pickErr
 		})
@@ -2549,7 +2566,7 @@ func (m *Manager) SelectHomeAuthByKind(ctx context.Context, provider string, mod
 
 func (m *Manager) pickNext(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, ProviderExecutor, error) {
 	if m.strictEnabled(ctx) {
-		auth, exec, _, err := m.strictPick(ctx, opts, []string{provider}, model, func(pinned cliproxyexecutor.Options) (*Auth, ProviderExecutor, string, error) {
+		auth, exec, _, err := m.strictPick(ctx, opts, []string{provider}, model, tried, func(pinned cliproxyexecutor.Options) (*Auth, ProviderExecutor, string, error) {
 			a, e, pickErr := m.pickNext(strictPickContext(ctx), provider, model, pinned, tried)
 			return a, e, provider, pickErr
 		})
@@ -2685,7 +2702,7 @@ func (m *Manager) HasAlternativeTargetForModel(ctx context.Context, providers []
 
 func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, ProviderExecutor, string, error) {
 	if m.strictEnabled(ctx) {
-		return m.strictPick(ctx, opts, providers, model, func(pinned cliproxyexecutor.Options) (*Auth, ProviderExecutor, string, error) {
+		return m.strictPick(ctx, opts, providers, model, tried, func(pinned cliproxyexecutor.Options) (*Auth, ProviderExecutor, string, error) {
 			return m.pickNextMixedLegacy(strictPickContext(ctx), providers, model, pinned, tried)
 		})
 	}
@@ -2876,7 +2893,7 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 
 func (m *Manager) pickNextMixed(ctx context.Context, providers []string, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, ProviderExecutor, string, error) {
 	if m.strictEnabled(ctx) {
-		return m.strictPick(ctx, opts, providers, model, func(pinned cliproxyexecutor.Options) (*Auth, ProviderExecutor, string, error) {
+		return m.strictPick(ctx, opts, providers, model, tried, func(pinned cliproxyexecutor.Options) (*Auth, ProviderExecutor, string, error) {
 			return m.pickNextMixed(strictPickContext(ctx), providers, model, pinned, tried)
 		})
 	}

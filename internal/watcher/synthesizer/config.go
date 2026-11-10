@@ -21,6 +21,14 @@ func NewConfigSynthesizer() *ConfigSynthesizer {
 	return &ConfigSynthesizer{}
 }
 
+func addSubscriptionFallbackToAttrs(fallback *config.SubscriptionFallbackConfig, attrs map[string]string) {
+	if fallback == nil {
+		return
+	}
+	attrs["subscription_fallback_auth_id"] = fallback.AuthID
+	attrs["subscription_fallback_enabled"] = strconv.FormatBool(fallback.Enabled)
+}
+
 // authProxyConnectionPool converts a per-credential pool override from config into
 // the SDK representation carried on the auth record. Values are copied so the auth
 // snapshot never aliases a live config field.
@@ -228,6 +236,7 @@ func (s *ConfigSynthesizer) synthesizeClaudeKeys(ctx *SynthesisContext) []*corea
 		if ck.Priority != 0 {
 			attrs["priority"] = strconv.Itoa(ck.Priority)
 		}
+		addSubscriptionFallbackToAttrs(ck.SubscriptionFallback, attrs)
 		addWeightToAttrs(ck.Weight, attrs)
 		if base != "" {
 			attrs["base_url"] = base
@@ -318,6 +327,7 @@ func (s *ConfigSynthesizer) synthesizeCodexStyleKeys(ctx *SynthesisContext, entr
 		if entry.Priority != 0 {
 			attrs["priority"] = strconv.Itoa(entry.Priority)
 		}
+		addSubscriptionFallbackToAttrs(entry.SubscriptionFallback, attrs)
 		addWeightToAttrs(entry.Weight, attrs)
 		if baseURL != "" {
 			attrs["base_url"] = baseURL

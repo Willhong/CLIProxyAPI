@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"regexp"
@@ -1366,6 +1367,8 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 			scheduleUnauthorizedRefresh = true
 		}
 
+		recordSubscriptionProof(auth, result, modelKey, responseHeaders, now)
+		auth.subscriptionReloadGeneration = 0
 		auth.Generation++
 		auth.UpdatedAt = now
 
@@ -1913,6 +1916,8 @@ func clearAuthStateOnSuccess(auth *Auth, now time.Time) {
 	if auth == nil {
 		return
 	}
+	auth.Metadata = maps.Clone(auth.Metadata)
+	delete(auth.Metadata, subscriptionProofKey)
 	if hasUnauthorizedAuthFailure(auth) {
 		auth.Unavailable = true
 		return

@@ -315,10 +315,23 @@ func (w *Watcher) addOrUpdateClientLocked(path string) {
 	if !w.isPathInCurrentAuthDir(path) {
 		return
 	}
+	w.readAuthFileLocked(path, false)
+}
+
+// finalCheck bounds missing-file reconciliation: it never schedules another retry.
+func (w *Watcher) readAuthFileLocked(path string, finalCheck bool) {
 	w.observeAuthFile(path)
 	data, errRead := os.ReadFile(path)
 	if errRead != nil {
-		log.Errorf("failed to read auth file %s: %v", filepath.Base(path), errRead)
+		if os.IsNotExist(errRead) && w.isKnownAuthFile(path) {
+			if finalCheck {
+				w.removeClientLocked(path)
+			} else {
+				w.scheduleAuthRecheckLocked(path, replaceCheckDelay+75*time.Millisecond)
+			}
+		} else {
+			log.Errorf("failed to read auth file %s: %v", filepath.Base(path), errRead)
+		}
 		return
 	}
 	if len(data) == 0 {

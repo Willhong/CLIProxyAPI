@@ -75,6 +75,41 @@ func InitializeConversationBindings(path string) error {
 	return db.Update(func(tx *bolt.Tx) error { _, errCreate := tx.CreateBucket(conversationBucket); return errCreate })
 }
 
+// openConversationBindings bounds file-lock contention without leaving an opener
+// goroutine behind when the request is canceled. Each failed Open closes its file;
+// a tiny nonzero Timeout makes bbolt try flock once rather than sleep internally.
+// The retry wait, unlike bbolt's own 30-second wait, observes the request context.
+func openConversationBindings(ctx context.Context, path string) (*bolt.DB, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	for {
+		if err := waitCtx.Err(); err != nil {
+			return nil, err
+		}
+		db, err := bolt.Open(path, 0600, &bolt.Options{Timeout: time.Nanosecond})
+		if err == nil {
+			if err = waitCtx.Err(); err != nil {
+				_ = db.Close()
+				return nil, err
+			}
+			return db, nil
+		}
+		if !errors.Is(err, bolt.ErrTimeout) {
+			return nil, err
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-waitCtx.Done():
+			timer.Stop()
+			return nil, waitCtx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
 func strictConversationError(code string, status int) error {
 	return &Error{Code: code, Message: code, HTTPStatus: status}
 }
@@ -188,6 +223,7 @@ func (m *Manager) prepareStrictConversation(ctx context.Context, opts cliproxyex
 		}
 		return opts, err
 	}
+	opts.Metadata = maps.Clone(opts.Metadata)
 	opts.EnsureMetadata()
 	opts.Metadata[strictConversationMetadataKey] = id
 	opts.Headers = opts.Headers.Clone()
@@ -205,7 +241,7 @@ func (m *Manager) prepareStrictConversation(ctx context.Context, opts cliproxyex
 // up its quota for model; any other failure of the bound account fails closed.
 // providers lists the providers this request may be served by; the binding is written
 // under the provider of the credential actually picked.
-func (m *Manager) strictPick(ctx context.Context, opts cliproxyexecutor.Options, providers []string, model string, pick func(cliproxyexecutor.Options) (*Auth, ProviderExecutor, string, error)) (*Auth, ProviderExecutor, string, error) {
+func (m *Manager) strictPick(ctx context.Context, opts cliproxyexecutor.Options, providers []string, model string, tried map[string]struct{}, pick func(cliproxyexecutor.Options) (*Auth, ProviderExecutor, string, error)) (*Auth, ProviderExecutor, string, error) {
 	cfg := m.runtimeConfig.Load().(*internalconfig.Config)
 	if !cfg.Routing.StrictConversationAffinity {
 		return pick(opts)
@@ -232,8 +268,11 @@ func (m *Manager) strictPick(ctx context.Context, opts cliproxyexecutor.Options,
 	if err != nil || !info.Mode().IsRegular() {
 		return nil, nil, "", strictConversationError("conversation_storage_unavailable", http.StatusServiceUnavailable)
 	}
-	db, err := bolt.Open(path, 0600, &bolt.Options{Timeout: 30 * time.Second})
+	db, err := openConversationBindings(ctx, path)
 	if err != nil {
+		if ctx != nil && ctx.Err() != nil {
+			return nil, nil, "", ctx.Err()
+		}
 		return nil, nil, "", strictConversationError("conversation_storage_unavailable", http.StatusServiceUnavailable)
 	}
 	defer db.Close()
@@ -262,7 +301,13 @@ func (m *Manager) strictPick(ctx context.Context, opts cliproxyexecutor.Options,
 				bound = old
 			}
 		}
+		originalBound := string(bound)
+		var fallbackParent string
+		opts, fallbackParent = m.subscriptionOptions(opts, providers, model, originalBound, tried)
 		moving := bound != nil && m.authQuotaExhausted(string(bound), model)
+		if fallbackParent != "" {
+			bound = nil
+		}
 		if moving {
 			// The selector skips the exhausted account, so it picks another one.
 			bound = nil
@@ -274,9 +319,15 @@ func (m *Manager) strictPick(ctx context.Context, opts cliproxyexecutor.Options,
 			opts.Metadata[cliproxyexecutor.PinnedAuthMetadataKey] = string(bound)
 		}
 		var errPick error
+		recheckingQuota := false
 		auth, executor, provider, errPick = pick(opts)
 		if errPick != nil {
-			return errPick
+			auth, executor = m.recheckSubscriptionQuota(ctx, opts, providers, model, originalBound, tried, errPick)
+			if auth == nil {
+				return errPick
+			}
+			provider = auth.Provider
+			recheckingQuota = true
 		}
 		if auth == nil || auth.ID == "" {
 			return strictConversationError("auth_not_found", http.StatusServiceUnavailable)
@@ -285,6 +336,12 @@ func (m *Manager) strictPick(ctx context.Context, opts cliproxyexecutor.Options,
 			return strictConversationError("conversation_account_unavailable", http.StatusServiceUnavailable)
 		}
 		key := providerKey(auth.Provider)
+		if fallbackParent != "" {
+			return bucket.Put(key, []byte(fallbackParent))
+		}
+		if recheckingQuota && originalBound != "" {
+			return nil
+		}
 		if !moving && bucket.Get(key) != nil {
 			return nil
 		}
@@ -292,6 +349,9 @@ func (m *Manager) strictPick(ctx context.Context, opts cliproxyexecutor.Options,
 	})
 	if err != nil {
 		return nil, nil, "", err
+	}
+	if auth.AuthKind() == AuthKindOAuth {
+		executor = subscriptionProofExecutor{executor}
 	}
 	return auth, executor, provider, nil
 }

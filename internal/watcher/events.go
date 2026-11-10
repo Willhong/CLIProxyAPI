@@ -88,6 +88,7 @@ func (w *Watcher) syncAuthDirWatch() {
 }
 
 func (w *Watcher) processEvents(ctx context.Context) {
+	defer w.stopAuthRechecks()
 	for {
 		select {
 		case <-ctx.Done():
@@ -107,6 +108,9 @@ func (w *Watcher) processEvents(ctx context.Context) {
 }
 
 func (w *Watcher) handleEvent(event fsnotify.Event) {
+	if w.stopped.Load() {
+		return
+	}
 	// Filter only relevant events: config file or auth-dir JSON files.
 	configOps := fsnotify.Write | fsnotify.Create | fsnotify.Rename
 	normalizedName := w.normalizeAuthPath(event.Name)
@@ -133,7 +137,7 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 	// Handle auth directory changes incrementally (.json only)
 	w.authRescanMu.Lock()
 	defer w.authRescanMu.Unlock()
-	if !w.isPathInAuthDir(normalizedName, w.currentAuthDir()) {
+	if w.stopped.Load() || !w.isPathInAuthDir(normalizedName, w.currentAuthDir()) {
 		return
 	}
 	w.observeAuthFile(event.Name)
@@ -141,6 +145,7 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 	if event.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
 		if w.shouldDebounceRemove(normalizedName, now) {
 			log.Debugf("debouncing remove event for %s", filepath.Base(event.Name))
+			w.scheduleAuthRecheckLocked(event.Name, authRemoveDebounceWindow)
 			return
 		}
 		// Atomic replace on some platforms may surface as Rename (or Remove) before the new file is ready.
@@ -174,6 +179,10 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 			}
 			log.Infof("auth file changed (%s): %s, processing incrementally", event.Op.String(), filepath.Base(event.Name))
 			w.addOrUpdateClientLocked(event.Name)
+			return
+		}
+		if _, err := os.Stat(event.Name); !os.IsNotExist(err) {
+			// Permission and I/O errors are not evidence of deletion.
 			return
 		}
 		if !w.isKnownAuthFile(event.Name) {
@@ -244,8 +253,8 @@ func (w *Watcher) isKnownAuthFile(path string) bool {
 	normalized := w.normalizeAuthPath(path)
 	w.clientsMutex.RLock()
 	defer w.clientsMutex.RUnlock()
-	_, ok := w.lastAuthHashes[normalized]
-	return ok
+	_, hashed := w.lastAuthHashes[normalized]
+	return hashed || len(w.fileAuthsByPath[normalized]) > 0
 }
 
 func (w *Watcher) normalizeAuthPath(path string) string {

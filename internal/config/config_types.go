@@ -718,7 +718,13 @@ type CloakConfig struct {
 
 // ClaudeKey represents the configuration for a Claude API key,
 // including the API key itself and an optional base URL for the API endpoint.
+type SubscriptionFallbackConfig struct {
+	AuthID  string `yaml:"auth-id" json:"auth-id"`
+	Enabled bool   `yaml:"enabled" json:"enabled"`
+}
+
 type ClaudeKey struct {
+	SubscriptionFallback *SubscriptionFallbackConfig `yaml:"subscription-fallback,omitempty" json:"subscription-fallback,omitempty"`
 	// APIKey is the authentication key for accessing Claude API services.
 	APIKey string `yaml:"api-key" json:"api-key"`
 
@@ -844,6 +850,7 @@ func (m ClaudeModel) GetThinking() *registry.ThinkingSupport { return m.Thinking
 // CodexKey represents the configuration for a Codex API key,
 // including the API key itself and an optional base URL for the API endpoint.
 type CodexKey struct {
+	SubscriptionFallback *SubscriptionFallbackConfig `yaml:"subscription-fallback,omitempty" json:"subscription-fallback,omitempty"`
 	// APIKey is the authentication key for accessing Codex API services.
 	APIKey string `yaml:"api-key" json:"api-key"`
 
